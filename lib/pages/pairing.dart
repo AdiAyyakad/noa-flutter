@@ -4,6 +4,7 @@ import 'package:noa/models/app_logic_model.dart' as app;
 import 'package:noa/pages/noa.dart';
 import 'package:noa/style.dart';
 import 'package:noa/util/switch_page.dart';
+import 'package:noa/widgets/top_title_bar.dart';
 
 class PairingPage extends ConsumerWidget {
   const PairingPage({super.key});
@@ -17,145 +18,129 @@ class PairingPage extends ConsumerWidget {
       }
     });
 
-    String pairingBoxText = "";
-    String pairingBoxButtonText = "";
-    Image pairingBoxImage = Image.asset('assets/images/charge.gif');
-    bool pairingBoxButtonEnabled = false;
+    String statusText = "";
+    String buttonText = "";
+    bool buttonEnabled = false;
     int updateProgress = ref.watch(app.model).bluetoothUploadProgress.toInt();
     String deviceName = ref.watch(app.model).deviceName;
 
     switch (ref.watch(app.model).state.current) {
       case app.State.scanning:
-        pairingBoxText = "Bring your device close";
-        pairingBoxButtonText = "Searching";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Scanning for nearby devices...";
+        buttonText = "Searching";
+        buttonEnabled = false;
         break;
       case app.State.found:
-        pairingBoxText = "$deviceName found";
-        pairingBoxButtonText = "Pair";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = true;
+        statusText = "$deviceName found";
+        buttonText = "Connect";
+        buttonEnabled = true;
         break;
       case app.State.connect:
       case app.State.stopLuaApp:
       case app.State.checkFirmwareVersion:
       case app.State.triggerUpdate:
-        pairingBoxText = "$deviceName found";
-        pairingBoxButtonText = "Connecting";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Connecting to $deviceName...";
+        buttonText = "Connecting";
+        buttonEnabled = false;
         break;
       case app.State.updateFirmware:
-        pairingBoxText = "Updating software $updateProgress%";
-        pairingBoxButtonText = "Keep your device close";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Updating firmware: $updateProgress%";
+        buttonText = "Please wait";
+        buttonEnabled = false;
         break;
       case app.State.uploadMainLua:
-        pairingBoxText = "Setting up Noa 50%";
-        pairingBoxButtonText = "Keep your device close";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Setting up device: 50%";
+        buttonText = "Please wait";
+        buttonEnabled = false;
         break;
       case app.State.uploadGraphicsLua:
-        pairingBoxText = "Setting up Noa 68%";
-        pairingBoxButtonText = "Keep your device close";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Setting up device: 68%";
+        buttonText = "Please wait";
+        buttonEnabled = false;
         break;
       case app.State.uploadStateLua:
-        pairingBoxText = "Setting up Noa 83%";
-        pairingBoxButtonText = "Keep your device close";
-        pairingBoxImage = Image.asset('assets/images/charge.gif');
-        pairingBoxButtonEnabled = false;
+        statusText = "Setting up device: 83%";
+        buttonText = "Please wait";
+        buttonEnabled = false;
         break;
       case app.State.requiresRepair:
-        pairingBoxText = "Un-pair Frame first";
-        pairingBoxButtonText = "Try again";
-        pairingBoxImage = Image.asset('assets/images/repair.gif');
-        pairingBoxButtonEnabled = true;
+        statusText = "Connection failed - Un-pair device first";
+        buttonText = "Try again";
+        buttonEnabled = true;
         break;
     }
 
     return Scaffold(
-      backgroundColor: colorDark,
-      appBar: AppBar(
-        backgroundColor: colorDark,
-        title: Image.asset('assets/images/brilliant_logo.png'),
-      ),
-      body: Column(
-        children: [
-          const Expanded(
-            child: Center(
-              child: Text("Setup your device", style: textStyleLightHeading),
-            ),
-          ),
-          AspectRatio(
-            aspectRatio: 1,
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 22, left: 11, right: 11),
-              decoration: const BoxDecoration(
-                color: colorWhite,
-                borderRadius: BorderRadius.all(Radius.circular(42)),
+      backgroundColor: colorWhite,
+      appBar: topTitleBar(context, 'DEVICES', false, false),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Spacer(),
+            // Device status
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 40),
+              padding: const EdgeInsets.all(40),
+              decoration: BoxDecoration(
+                color: colorLight.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
               ),
               child: Column(
                 children: [
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 20, right: 20),
-                      child: GestureDetector(
-                        onTap: () {
-                          ref
-                              .read(app.model)
-                              .triggerEvent(app.Event.cancelPressed);
-                        },
-                        child: const Icon(
-                          Icons.cancel,
-                          color: colorDark,
-                        ),
-                      ),
-                    ),
+                  Icon(
+                    ref.watch(app.model).state.current == app.State.found
+                        ? Icons.bluetooth
+                        : ref.watch(app.model).state.current == app.State.scanning
+                            ? Icons.bluetooth_searching
+                            : Icons.bluetooth_connected,
+                    size: 64,
+                    color: buttonEnabled ? colorDark : colorLight,
                   ),
+                  const SizedBox(height: 20),
                   Text(
-                    pairingBoxText,
-                    style: const TextStyle(
-                      fontFamily: 'SF Pro Display',
-                      color: colorDark,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ), //
-                  Expanded(
-                    child: pairingBoxImage,
+                    statusText,
+                    style: textStyleDarkHeading,
+                    textAlign: TextAlign.center,
                   ),
-                  GestureDetector(
-                    onTap: () {
-                      ref.read(app.model).triggerEvent(app.Event.buttonPressed);
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: pairingBoxButtonEnabled ? colorDark : colorLight,
-                        borderRadius:
-                            const BorderRadius.all(Radius.circular(20)),
-                      ),
-                      height: 50,
-                      margin: const EdgeInsets.only(
-                          left: 31, right: 31, bottom: 28),
-                      child: Center(
-                        child: Text(
-                          pairingBoxButtonText,
-                          style: textStyleWhiteWidget,
+                  const SizedBox(height: 30),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: buttonEnabled
+                          ? () {
+                              ref.read(app.model).triggerEvent(app.Event.buttonPressed);
+                            }
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: buttonEnabled ? colorDark : colorLight,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
                         ),
+                      ),
+                      child: Text(
+                        buttonText,
+                        style: textStyleWhiteWidget,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+            const Spacer(),
+            // Instruction text
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 40),
+              child: Text(
+                "Make sure your smart glasses are turned on and nearby. The app will automatically detect and connect to available devices.",
+                style: textStyleLight,
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 40),
+          ],
+        ),
       ),
     );
   }
