@@ -17,8 +17,6 @@ const _firmwareVersion = "v24.310.0800";
 const _scriptVersion = "v1.0.0";
 
 enum State {
-  getUserSettings,
-  waitForLogin,
   scanning,
   found,
   connect,
@@ -35,15 +33,12 @@ enum State {
   recheckFirmwareVersion,
   checkScriptVersion,
   sendResponseToDevice,
-  logout,
-  deleteAccount
 }
 
 enum Event {
   init,
   done,
   error,
-  loggedIn,
   deviceFound,
   deviceLost,
   deviceConnected,
@@ -52,52 +47,474 @@ enum Event {
   deviceInvalid,
   buttonPressed,
   cancelPressed,
-  logoutPressed,
-  deletePressed,
   deviceUpToDate,
   deviceNeedsUpdate,
-  noaResponse,
-}
-
-enum TuneLength {
-  shortest('shortest'),
-  short('short'),
-  standard('standard'),
-  long('long'),
-  longest('longest');
-
-  const TuneLength(this.value);
-  final String value;
+  messageReceived,
 }
 
 class AppLogicModel extends ChangeNotifier {
   // Public state variables
-  StateMachine state = StateMachine(State.getUserSettings);
+  StateMachine state = StateMachine(State.scanning);
   NoaUser noaUser = NoaUser();
   double bluetoothUploadProgress = 0;
   String deviceName = "Device";
   List<NoaMessage> noaMessages = List.empty(growable: true);
 
-  void setUserAuthToken(String token) {
-    SharedPreferences.getInstance().then((value) async {
-      await value.setString("userAuthToken", token);
-      triggerEvent(Event.loggedIn);
-    });
-  }
-
-  Future<String?> _getUserAuthToken() async {
-    return await SharedPreferences.getInstance()
-        .then((value) => value.getString('userAuthToken'));
-  }
-
   void _setPairedDevice(String token) {
     SharedPreferences.getInstance().then((value) async {
       await value.setString("PairedDevice", token);
-      triggerEvent(Event.loggedIn);
     });
   }
 
   Future<String?> _getPairedDevice() async {
+    return await SharedPreferences.getInstance()
+        .then((value) => value.getString('PairedDevice'));
+  }
+
+  // Private state variables
+  StreamSubscription? _scanStream;
+  StreamSubscription? _connectionStream;
+  StreamSubscription? _luaResponseStream;
+  StreamSubscription? _dataResponseStream;
+  BrilliantScannedDevice? _nearbyDevice;
+  BrilliantDevice? _connectedDevice;
+  List<int> _audioData = List.empty(growable: true);
+  List<int> _imageData = List.empty(growable: true);
+
+  AppLogicModel() {
+    // Add initial welcome message
+    noaMessages.add(NoaMessage(
+      message: "Welcome! Connect to your device to start chatting.",
+      from: NoaRole.noa,
+      time: DateTime.now(),
+    ));
+  }
+
+  // Add a method to send user messages
+  void sendUserMessage(String message) {
+    _log.info("User sent message: $message");
+    
+    // Add user message
+    noaMessages.add(NoaMessage(
+      message: message,
+      from: NoaRole.user,
+      time: DateTime.now(),
+    ));
+
+    // Handle special commands
+    String response;
+    if (message.toLowerCase().trim() == "camera") {
+      response = "📸 Taking a picture...";
+      _handleCameraCommand();
+    } else if (message.toLowerCase().trim() == "microphone") {
+      response = "🎤 Recording audio for 1 minute...";
+      _handleMicrophoneCommand();
+    } else {
+      response = "Message displayed on glasses: $message";
+    }
+
+    // Add response message
+    Timer(const Duration(milliseconds: 500), () {
+      noaMessages.add(NoaMessage(
+        message: response,
+        from: NoaRole.noa,
+        time: DateTime.now(),
+      ));
+      
+      // Send to device if connected
+      if (state.current == State.connected && _connectedDevice != null) {
+        _sendMessageToDevice(message);
+      }
+      
+      notifyListeners();
+    });
+    
+    notifyListeners();
+  }
+
+  void _handleCameraCommand() {
+    // TODO: Implement camera functionality
+    _log.info("Camera command triggered");
+  }
+
+  void _handleMicrophoneCommand() {
+    // TODO: Implement microphone functionality
+    _log.info("Microphone command triggered - recording for 1 minute");
+  }
+
+  void _sendMessageToDevice(String message) async {
+    try {
+      if (_connectedDevice != null) {
+        final splitString = utf8
+            .encode(message)
+            .slices(_connectedDevice!.maxDataLength! - 1);
+        for (var slice in splitString) {
+          List<int> data = slice.toList()..insert(0, 0x20);
+          await _connectedDevice!
+              .sendData(data)
+              .timeout(const Duration(seconds: 1));
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
+    } catch (error) {
+      _log.warning("Failed to send message to device: $error");
+    }
+  }
+
+  void triggerEvent(Event event) {
+    state.event(event);
+
+    do {
+      switch (state.current) {
+        case State.scanning:
+          state.onEntry(() async {
+            await _scanStream?.cancel();
+            _scanStream = BrilliantBluetooth.scan()
+                .timeout(const Duration(seconds: 2), onTimeout: (sink) {
+              _nearbyDevice = null;
+              triggerEvent(Event.deviceLost);
+            }).listen((device) {
+              _nearbyDevice = device;
+              deviceName = device.device.advName;
+              triggerEvent(Event.deviceFound);
+            });
+          });
+          state.changeOn(Event.deviceFound, State.found);
+          state.changeOn(Event.cancelPressed, State.disconnected,
+              transitionTask: () async => await BrilliantBluetooth.stopScan());
+          break;
+
+        case State.found:
+          state.changeOn(Event.deviceLost, State.scanning);
+          state.changeOn(Event.buttonPressed, State.connect);
+          state.changeOn(Event.cancelPressed, State.disconnected,
+              transitionTask: () async => await BrilliantBluetooth.stopScan());
+          break;
+
+        case State.connect:
+          state.onEntry(() async {
+            try {
+              _connectedDevice =
+                  await BrilliantBluetooth.connect(_nearbyDevice!);
+              switch (_connectedDevice!.state) {
+                case BrilliantConnectionState.connected:
+                  triggerEvent(Event.deviceConnected);
+                  break;
+                case BrilliantConnectionState.dfuConnected:
+                  triggerEvent(Event.updatableDeviceConnected);
+                  break;
+                default:
+                  throw ();
+              }
+            } catch (_) {
+              triggerEvent(Event.deviceInvalid);
+            }
+          });
+          state.changeOn(Event.deviceConnected, State.stopLuaApp);
+          state.changeOn(Event.updatableDeviceConnected, State.updateFirmware);
+          state.changeOn(Event.deviceInvalid, State.requiresRepair);
+          break;
+
+        case State.stopLuaApp:
+          state.onEntry(() async {
+            try {
+              await _connectedDevice!.sendBreakSignal();
+              triggerEvent(Event.done);
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+          state.changeOn(Event.done, State.checkFirmwareVersion);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.checkFirmwareVersion:
+          state.onEntry(() async {
+            try {
+              final response = await _connectedDevice!
+                  .sendString("print(frame.FIRMWARE_VERSION)")
+                  .timeout(const Duration(seconds: 1));
+              if (response == _firmwareVersion) {
+                triggerEvent(Event.deviceUpToDate);
+              } else {
+                triggerEvent(Event.deviceNeedsUpdate);
+              }
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+          state.changeOn(Event.deviceUpToDate, State.uploadMainLua);
+          state.changeOn(Event.deviceNeedsUpdate, State.triggerUpdate);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.uploadMainLua:
+          state.onEntry(() async {
+            try {
+              await _connectedDevice!.uploadScript(
+                'main.lua',
+                'assets/lua_scripts/main.lua',
+              );
+              triggerEvent(Event.done);
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+
+          state.changeOn(Event.done, State.uploadGraphicsLua);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.uploadGraphicsLua:
+          state.onEntry(() async {
+            try {
+              await _connectedDevice!.uploadScript(
+                'graphics.lua',
+                'assets/lua_scripts/graphics.lua',
+              );
+              triggerEvent(Event.done);
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+
+          state.changeOn(Event.done, State.uploadStateLua);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.uploadStateLua:
+          state.onEntry(() async {
+            try {
+              await _connectedDevice!.uploadScript(
+                'state.lua',
+                'assets/lua_scripts/state.lua',
+              );
+              await _connectedDevice!.sendResetSignal();
+              _setPairedDevice(_connectedDevice!.device.remoteId.toString());
+              triggerEvent(Event.done);
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+
+          state.changeOn(Event.done, State.connected);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.triggerUpdate:
+          state.onEntry(() async {
+            try {
+              await _connectedDevice!.sendString(
+                "frame.update()",
+                awaitResponse: false,
+              );
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+            await _scanStream?.cancel();
+            _scanStream = BrilliantBluetooth.scan().listen((device) {
+              _nearbyDevice = device;
+              triggerEvent(Event.deviceFound);
+            });
+          });
+          state.changeOn(Event.deviceFound, State.connect,
+              transitionTask: () async => await BrilliantBluetooth.stopScan());
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.updateFirmware:
+          state.onEntry(() async {
+            _connectedDevice!
+                .updateFirmware("assets/frame-firmware-$_firmwareVersion.zip")
+                .listen(
+              (value) {
+                bluetoothUploadProgress = value;
+                notifyListeners();
+              },
+              onDone: () async {
+                try {
+                  await _scanStream?.cancel();
+                  _scanStream = BrilliantBluetooth.scan().listen((device) {
+                    _nearbyDevice = device;
+                    triggerEvent(Event.deviceFound);
+                  });
+                } catch (error) {
+                  triggerEvent(Event.error);
+                }
+              },
+              onError: (_) async {
+                await _connectedDevice?.disconnect();
+                triggerEvent(Event.error);
+              },
+              cancelOnError: true,
+            );
+          });
+          state.changeOn(Event.deviceFound, State.connect);
+          state.changeOn(Event.error, State.requiresRepair);
+          break;
+
+        case State.requiresRepair:
+          state.changeOn(Event.buttonPressed, State.scanning);
+          state.changeOn(Event.cancelPressed, State.disconnected);
+          break;
+
+        case State.connected:
+          state.onEntry(() async {
+            _connectionStream?.cancel();
+            _connectionStream =
+                _connectedDevice!.connectionState.listen((event) {
+              _connectedDevice = event;
+              if (event.state == BrilliantConnectionState.disconnected) {
+                triggerEvent(Event.deviceDisconnected);
+              }
+            });
+            _connectionStream?.onError((_) {});
+
+            _luaResponseStream?.cancel();
+            _luaResponseStream =
+                _connectedDevice!.stringResponse.listen((event) {});
+
+            _dataResponseStream?.cancel();
+            _dataResponseStream =
+                _connectedDevice!.dataResponse.listen((event) async {
+              switch (event[0]) {
+                case 0x10:
+                  _log.info("Received user generation request from device");
+                  _audioData.clear();
+                  _imageData.clear();
+                  break;
+                case 0x13:
+                  _audioData += event.sublist(1);
+                  break;
+                case 0x14:
+                  _imageData += event.sublist(1);
+                  break;
+                case 0x15:
+                  _log.info(
+                      "Received data from device. ${_audioData.length} bytes of audio, ${_imageData.length} bytes of image");
+                  // For now, just acknowledge the received data
+                  triggerEvent(Event.messageReceived);
+                  break;
+              }
+            });
+          });
+
+          state.changeOn(Event.messageReceived, State.sendResponseToDevice);
+          state.changeOn(Event.deviceDisconnected, State.disconnected);
+          break;
+
+        case State.sendResponseToDevice:
+          state.onEntry(() async {
+            try {
+              // Send a simple acknowledgment
+              final message = "Message received";
+              final splitString = utf8
+                  .encode(message)
+                  .slices(_connectedDevice!.maxDataLength! - 1);
+              for (var slice in splitString) {
+                List<int> data = slice.toList()..insert(0, 0x20);
+                await _connectedDevice!
+                    .sendData(data)
+                    .timeout(const Duration(seconds: 1));
+                await Future.delayed(const Duration(milliseconds: 50));
+              }
+              await Future.delayed(const Duration(milliseconds: 300));
+            } catch (_) {}
+            triggerEvent(Event.done);
+          });
+
+          state.changeOn(Event.done, State.connected);
+          break;
+
+        case State.disconnected:
+          state.onEntry(() async {
+            _connectionStream?.cancel();
+            _connectionStream =
+                _connectedDevice?.connectionState.listen((event) {
+              _connectedDevice = event;
+              if (event.state == BrilliantConnectionState.connected) {
+                triggerEvent(Event.deviceConnected);
+              }
+            });
+            _connectionStream?.onError((_) {});
+
+            try {
+              _connectedDevice ??= await BrilliantBluetooth.reconnect(
+                  (await _getPairedDevice())!);
+              if (_connectedDevice?.state ==
+                  BrilliantConnectionState.connected) {
+                triggerEvent(Event.deviceConnected);
+              }
+            } catch (_) {}
+          });
+          state.changeOn(Event.deviceConnected, State.recheckFirmwareVersion);
+          break;
+
+        case State.recheckFirmwareVersion:
+          state.onEntry(() async {
+            _dataResponseStream?.cancel();
+            _dataResponseStream =
+                _connectedDevice!.dataResponse.listen((event) async {
+              _log.info("Firmware version: ${utf8.decode(event.sublist(1))}");
+              if (utf8.decode(event.sublist(1)) == _firmwareVersion) {
+                triggerEvent(Event.deviceUpToDate);
+              } else {
+                triggerEvent(Event.deviceNeedsUpdate);
+              }
+            });
+            try {
+              await _connectedDevice!
+                  .sendData(List<int>.filled(1, 0x16))
+                  .timeout(const Duration(seconds: 1));
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+          state.changeOn(Event.deviceUpToDate, State.checkScriptVersion);
+          state.changeOn(Event.deviceNeedsUpdate, State.stopLuaApp);
+          state.changeOn(Event.error, State.stopLuaApp);
+          break;
+
+        case State.checkScriptVersion:
+          state.onEntry(() async {
+            _dataResponseStream?.cancel();
+            _dataResponseStream =
+                _connectedDevice!.dataResponse.listen((event) async {
+              _log.info("Script version: ${utf8.decode(event.sublist(1))}");
+              if (utf8.decode(event.sublist(1)) == _scriptVersion) {
+                triggerEvent(Event.deviceUpToDate);
+              } else {
+                triggerEvent(Event.deviceNeedsUpdate);
+              }
+            });
+            try {
+              await _connectedDevice!
+                  .sendData(List<int>.filled(1, 0x17))
+                  .timeout(const Duration(seconds: 1));
+            } catch (_) {
+              triggerEvent(Event.error);
+            }
+          });
+          state.changeOn(Event.deviceUpToDate, State.connected);
+          state.changeOn(Event.deviceNeedsUpdate, State.stopLuaApp);
+          state.changeOn(Event.error, State.stopLuaApp);
+          break;
+      }
+    } while (state.changePending());
+
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    BrilliantBluetooth.stopScan();
+    super.dispose();
+  }
+}
+
+final model = ChangeNotifierProvider<AppLogicModel>((ref) {
+  return AppLogicModel();
+});
     return await SharedPreferences.getInstance()
         .then((value) => value.getString('PairedDevice'));
   }

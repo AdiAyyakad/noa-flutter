@@ -1,41 +1,10 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
-import 'package:image/image.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:logging/logging.dart';
-import 'package:noa/util/bytes_to_wav.dart';
-import 'package:noa/util/location.dart';
-import 'package:path_provider/path_provider.dart';
 
 final _log = Logger("Noa API");
 
-class NoaApiServerException implements Exception {
-  String reason;
-  int statusCode;
-
-  NoaApiServerException({
-    required this.reason,
-    required this.statusCode,
-  });
-
-  @override
-  String toString() {
-    return "NoaApiServerException: $statusCode: $reason";
-  }
-}
-
-enum NoaApiAuthProvider {
-  google('google'),
-  apple('apple'),
-  discord('discord');
-
-  const NoaApiAuthProvider(this.value);
-  final String value;
-}
-
+// Simplified user class for basic information
 class NoaUser {
   late String email;
   late String plan;
@@ -48,10 +17,10 @@ class NoaUser {
     int? creditsUsed,
     int? maxCredits,
   }) {
-    this.email = email ?? "Not logged in";
-    this.plan = plan ?? "";
+    this.email = email ?? "Local User";
+    this.plan = plan ?? "Basic";
     this.creditsUsed = creditsUsed ?? 0;
-    this.maxCredits = maxCredits ?? 0;
+    this.maxCredits = maxCredits ?? 100;
   }
 }
 
@@ -90,14 +59,37 @@ class NoaMessage {
   }
 }
 
-// All API endpoint features
+// Simplified API class for local operations only
 class NoaApi {
-  static Future<String> signIn(
-    String id,
-    NoaApiAuthProvider provider,
-  ) async {
-    _log.info("Signing in to Noa");
-    _log.fine("Provider: $provider, ID token: $id");
+  // Create a simple echo response for messages
+  static List<NoaMessage> createEchoResponse(String userMessage) {
+    _log.info("Creating echo response for: $userMessage");
+    
+    String response;
+    
+    // Special commands
+    if (userMessage.toLowerCase().trim() == "camera") {
+      response = "Taking a picture...";
+    } else if (userMessage.toLowerCase().trim() == "microphone") {
+      response = "Recording audio for 1 minute...";
+    } else {
+      response = "Message received: $userMessage";
+    }
+    
+    return [
+      NoaMessage(
+        message: userMessage,
+        from: NoaRole.user,
+        time: DateTime.now(),
+      ),
+      NoaMessage(
+        message: response,
+        from: NoaRole.noa,
+        time: DateTime.now().add(const Duration(seconds: 1)),
+      ),
+    ];
+  }
+}
     try {
       final response = await http.post(
         Uri.parse('https://api.brilliant.xyz/noa/user/signin'),
