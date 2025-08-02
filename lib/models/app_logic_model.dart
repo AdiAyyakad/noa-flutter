@@ -133,13 +133,32 @@ class AppLogicModel extends ChangeNotifier {
   }
 
   void _handleCameraCommand() {
-    // TODO: Implement camera functionality
     _log.info("Camera command triggered");
+    if (_connectedDevice != null && state.current == State.connected) {
+      try {
+        // Send camera command to device (0x30 is a custom command code for camera)
+        _connectedDevice!.sendData([0x30]).catchError((error) {
+          _log.warning("Failed to send camera command: $error");
+        });
+      } catch (error) {
+        _log.warning("Failed to send camera command: $error");
+      }
+    }
   }
 
   void _handleMicrophoneCommand() {
-    // TODO: Implement microphone functionality
     _log.info("Microphone command triggered - recording for 1 minute");
+    if (_connectedDevice != null && state.current == State.connected) {
+      try {
+        // Send microphone command to device (0x31 is a custom command code for microphone)
+        // Include duration in seconds (60 seconds = 1 minute)
+        _connectedDevice!.sendData([0x31, 60]).catchError((error) {
+          _log.warning("Failed to send microphone command: $error");
+        });
+      } catch (error) {
+        _log.warning("Failed to send microphone command: $error");
+      }
+    }
   }
 
   void _sendMessageToDevice(String message) async {
